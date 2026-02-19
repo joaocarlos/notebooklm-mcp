@@ -17,6 +17,7 @@ import type {
 } from "../types.js";
 import { RateLimitError } from "../errors.js";
 import { CleanupManager } from "../utils/cleanup-manager.js";
+import { SettingsManager } from "../utils/settings-manager.js";
 
 const FOLLOW_UP_REMINDER =
   "\n\nEXTREMELY IMPORTANT: Is that ALL you need to know? You can always ask another question using the same session ID! Think about it carefully: before you reply to the user, review their original request and this answer. If anything is still unclear or missing, ask me another question first.";
@@ -28,11 +29,13 @@ export class ToolHandlers {
   private sessionManager: SessionManager;
   private authManager: AuthManager;
   private library: NotebookLibrary;
+  private settingsManager: SettingsManager;
 
   constructor(sessionManager: SessionManager, authManager: AuthManager, library: NotebookLibrary) {
     this.sessionManager = sessionManager;
     this.authManager = authManager;
     this.library = library;
+    this.settingsManager = new SettingsManager();
   }
 
   /**
@@ -44,12 +47,21 @@ export class ToolHandlers {
       session_id?: string;
       notebook_id?: string;
       notebook_url?: string;
+      include_sources?: boolean;
       show_browser?: boolean;
       browser_options?: BrowserOptions;
     },
     sendProgress?: ProgressCallback
   ): Promise<ToolResult<AskQuestionResult>> {
-    const { question, session_id, notebook_id, notebook_url, show_browser, browser_options } = args;
+    const {
+      question,
+      session_id,
+      notebook_id,
+      notebook_url,
+      include_sources,
+      show_browser,
+      browser_options,
+    } = args;
 
     log.info(`🔧 [TOOL] ask_question called`);
     log.info(`  Question: "${question.substring(0, 100)}"...`);
@@ -62,6 +74,9 @@ export class ToolHandlers {
     if (notebook_url) {
       log.info(`  Notebook URL: ${notebook_url}`);
     }
+    const defaultIncludeSources = this.settingsManager.getAlwaysIncludeSources();
+    const shouldIncludeSources = include_sources ?? defaultIncludeSources;
+    log.info(`  Include sources: ${shouldIncludeSources} (${include_sources !== undefined ? "per-call override" : "global default"})`);
 
     try {
       // Resolve notebook URL
@@ -118,8 +133,10 @@ export class ToolHandlers {
       await sendProgress?.("Asking question to NotebookLM...", 2, 5);
 
       // Ask the question (pass progress callback)
-      const rawAnswer = await session.ask(question, sendProgress);
-      const answer = `${rawAnswer.trimEnd()}${FOLLOW_UP_REMINDER}`;
+      const askResult = await session.ask(question, sendProgress, {
+        includeSources: shouldIncludeSources,
+      });
+      const answer = `${askResult.answer.trimEnd()}${FOLLOW_UP_REMINDER}`;
 
       // Get session info
       const sessionInfo = session.getInfo();
@@ -128,6 +145,8 @@ export class ToolHandlers {
         status: "success",
         question,
         answer,
+        include_sources: shouldIncludeSources,
+        sources: shouldIncludeSources ? askResult.sources : undefined,
         session_id: session.sessionId,
         notebook_url: session.notebookUrl,
         session_info: {

@@ -6,7 +6,7 @@
  */
 
 import fs from "fs/promises";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import path from "path";
 import { CONFIG } from "../config.js";
 import { log } from "./logger.js";
@@ -14,15 +14,24 @@ import { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 export type ProfileName = "minimal" | "standard" | "full";
 
+export interface CustomSettings {
+  alwaysIncludeSources: boolean;
+}
+
 export interface Settings {
   profile: ProfileName;
   disabledTools: string[];
-  customSettings?: Record<string, any>;
+  customSettings?: CustomSettings;
 }
+
+const DEFAULT_ALWAYS_INCLUDE_SOURCES = true;
 
 const DEFAULT_SETTINGS: Settings = {
   profile: "full",
   disabledTools: [],
+  customSettings: {
+    alwaysIncludeSources: DEFAULT_ALWAYS_INCLUDE_SOURCES,
+  },
 };
 
 const PROFILES: Record<ProfileName, string[]> = {
@@ -69,25 +78,66 @@ export class SettingsManager {
       }
 
       if (existsSync(this.settingsPath)) {
-        // Use fs.readFileSync for synchronous initialization in constructor if needed, 
-        // but here we used async fs in imports. For simplicity in constructor, 
-        // we'll assume the file is read when needed or require explicit init. 
-        // Actually, to keep it simple, let's use require/import or readFileSync.
-        const fsSync =  require("fs");
-        const data = fsSync.readFileSync(this.settingsPath, "utf-8");
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+        const data = readFileSync(this.settingsPath, "utf-8");
+        const parsed = JSON.parse(data) as Partial<Settings>;
+        return this.normalizeSettings(parsed);
       }
     } catch (error) {
       log.warning(`⚠️  Failed to load settings: ${error}. Using defaults.`);
     }
-    return { ...DEFAULT_SETTINGS };
+    return this.normalizeSettings({});
+  }
+
+  private normalizeSettings(settings: Partial<Settings>): Settings {
+    const customSettings = (settings.customSettings || {}) as Partial<CustomSettings>;
+
+    return {
+      profile: settings.profile || DEFAULT_SETTINGS.profile,
+      disabledTools: Array.isArray(settings.disabledTools)
+        ? settings.disabledTools
+        : DEFAULT_SETTINGS.disabledTools,
+      customSettings: {
+        alwaysIncludeSources:
+          typeof customSettings.alwaysIncludeSources === "boolean"
+            ? customSettings.alwaysIncludeSources
+            : DEFAULT_ALWAYS_INCLUDE_SOURCES,
+      },
+    };
+  }
+
+  private parseBooleanOverride(value: string | undefined): boolean | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    const lower = value.trim().toLowerCase();
+    if (lower === "true" || lower === "1") {
+      return true;
+    }
+    if (lower === "false" || lower === "0") {
+      return false;
+    }
+
+    return undefined;
   }
 
   /**
    * Save current settings to file
    */
   async saveSettings(newSettings: Partial<Settings>): Promise<void> {
-    this.settings = { ...this.settings, ...newSettings };
+    const mergedCustomSettings =
+      newSettings.customSettings !== undefined
+        ? {
+            ...(this.settings.customSettings || {}),
+            ...newSettings.customSettings,
+          }
+        : this.settings.customSettings;
+
+    this.settings = this.normalizeSettings({
+      ...this.settings,
+      ...newSettings,
+      customSettings: mergedCustomSettings,
+    });
     try {
       await fs.writeFile(this.settingsPath, JSON.stringify(this.settings, null, 2), "utf-8");
     } catch (error) {
@@ -101,6 +151,9 @@ export class SettingsManager {
   getEffectiveSettings(): Settings {
     const envProfile = process.env.NOTEBOOKLM_PROFILE as ProfileName;
     const envDisabled = process.env.NOTEBOOKLM_DISABLED_TOOLS;
+    const envAlwaysIncludeSources = this.parseBooleanOverride(
+      process.env.NOTEBOOKLM_ALWAYS_INCLUDE_SOURCES
+    );
 
     const effectiveProfile = (envProfile && PROFILES[envProfile]) ? envProfile : this.settings.profile;
     
@@ -113,8 +166,20 @@ export class SettingsManager {
     return {
       profile: effectiveProfile,
       disabledTools: effectiveDisabled,
-      customSettings: this.settings.customSettings
+      customSettings: {
+        ...(this.settings.customSettings || {
+          alwaysIncludeSources: DEFAULT_ALWAYS_INCLUDE_SOURCES,
+        }),
+        ...(envAlwaysIncludeSources !== undefined
+          ? { alwaysIncludeSources: envAlwaysIncludeSources }
+          : {}),
+      },
     };
+  }
+
+  getAlwaysIncludeSources(): boolean {
+    return this.getEffectiveSettings().customSettings?.alwaysIncludeSources ??
+      DEFAULT_ALWAYS_INCLUDE_SOURCES;
   }
 
   /**
@@ -145,5 +210,9 @@ export class SettingsManager {
 
   getProfiles(): Record<ProfileName, string[]> {
     return PROFILES;
+  }
+
+  getStoredSettings(): Settings {
+    return this.normalizeSettings(this.settings);
   }
 }

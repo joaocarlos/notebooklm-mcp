@@ -136,6 +136,12 @@ export const askQuestionTool: Tool = {
         description:
           "Optional notebook URL (overrides notebook_id). Use this for ad-hoc queries to notebooks not in your library.",
       },
+      include_sources: {
+        type: "boolean",
+        description:
+          "Whether to extract citation/source references from the NotebookLM response DOM. " +
+          "If omitted, uses the global always-include-sources setting (default: true).",
+      },
       show_browser: {
         type: "boolean",
         description:

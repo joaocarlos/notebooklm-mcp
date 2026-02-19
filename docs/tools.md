@@ -2,7 +2,8 @@
 
 ### Core
 - `ask_question`
-  - Parameters: `question` (string, required), optional `session_id`, `notebook_id`, `notebook_url`, `show_browser`.
+  - Parameters: `question` (string, required), optional `session_id`, `notebook_id`, `notebook_url`, `include_sources`, `show_browser`.
+  - `include_sources` defaults to the global `always-include-sources` setting (default `true`) and triggers DOM source/citation extraction.
   - Returns NotebookLM's answer plus the follow-up reminder.
 - `list_sessions`, `close_session`, `reset_session`
   - Inspect or manage active browser sessions.

@@ -19,16 +19,22 @@ import { AuthManager } from "../auth/auth-manager.js";
 import { humanType, randomDelay } from "../utils/stealth-utils.js";
 import {
   waitForLatestAnswer,
+  waitForLatestAnswerWithSources,
   snapshotAllResponses,
 } from "../utils/page-utils.js";
 import { CONFIG } from "../config.js";
 import { log } from "../utils/logger.js";
-import type { SessionInfo, ProgressCallback } from "../types.js";
+import type { SessionInfo, ProgressCallback, SourceReference } from "../types.js";
 import { RateLimitError } from "../errors.js";
 import {
   browserErrorMessage,
   isRecoverableBrowserError,
 } from "../utils/browser-errors.js";
+
+export interface AskResponse {
+  answer: string;
+  sources?: SourceReference[];
+}
 
 export class BrowserSession {
   public readonly sessionId: string;
@@ -354,8 +360,12 @@ export class BrowserSession {
   /**
    * Ask a question to NotebookLM
    */
-  async ask(question: string, sendProgress?: ProgressCallback): Promise<string> {
-    const askOnce = async (): Promise<string> => {
+  async ask(
+    question: string,
+    sendProgress?: ProgressCallback,
+    options: { includeSources?: boolean } = {}
+  ): Promise<AskResponse> {
+    const askOnce = async (): Promise<AskResponse> => {
       if (!this.initialized || !this.page || this.isPageClosedSafe()) {
         log.warning(`  ℹ️  Session not initialized or page missing → re-initializing...`);
         await this.init();
@@ -410,13 +420,27 @@ export class BrowserSession {
       // Wait for the response with streaming detection
       log.info(`  ⏳ Waiting for response (with streaming detection)...`);
       await sendProgress?.("Waiting for NotebookLM response (streaming detection active)...", 3, 5);
-      const answer = await waitForLatestAnswer(page, {
-        question,
-        timeoutMs: 120000, // 2 minutes
-        pollIntervalMs: 1000,
-        ignoreTexts: existingResponses,
-        debug: false,
-      });
+      let answer: string | null = null;
+      let sources: SourceReference[] | undefined;
+      if (options.includeSources) {
+        const result = await waitForLatestAnswerWithSources(page, {
+          question,
+          timeoutMs: 120000, // 2 minutes
+          pollIntervalMs: 1000,
+          ignoreTexts: existingResponses,
+          debug: false,
+        });
+        answer = result.answer;
+        sources = result.sources;
+      } else {
+        answer = await waitForLatestAnswer(page, {
+          question,
+          timeoutMs: 120000, // 2 minutes
+          pollIntervalMs: 1000,
+          ignoreTexts: existingResponses,
+          debug: false,
+        });
+      }
 
       if (!answer) {
         throw new Error("Timeout waiting for response from NotebookLM");
@@ -438,7 +462,14 @@ export class BrowserSession {
         `✅ [${this.sessionId}] Received answer (${answer.length} chars, ${this.messageCount} total messages)`
       );
 
-      return answer;
+      if (options.includeSources) {
+        log.info(`  📚 Extracted ${sources?.length || 0} source reference(s) from response DOM`);
+      }
+
+      return {
+        answer,
+        ...(options.includeSources ? { sources: sources || [] } : {}),
+      };
     };
 
     try {

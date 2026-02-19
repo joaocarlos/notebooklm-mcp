@@ -108,6 +108,7 @@ class NotebookLMMCPServer {
     log.info(`  Node: ${process.version}`);
     log.info(`  Platform: ${process.platform}`);
     log.info(`  Profile: ${activeSettings.profile} (${this.toolDefinitions.length} tools active)`);
+    log.info(`  Always Include Sources: ${activeSettings.customSettings?.alwaysIncludeSources ?? true}`);
   }
 
   /**
@@ -162,6 +163,7 @@ class NotebookLMMCPServer {
                 session_id?: string;
                 notebook_id?: string;
                 notebook_url?: string;
+                include_sources?: boolean;
                 show_browser?: boolean;
               },
               sendProgress

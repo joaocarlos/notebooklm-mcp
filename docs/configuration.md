@@ -41,6 +41,13 @@ browser_options: {
 - "Research this and show me the browser" → Sets `show: true`
 - "Use slow typing for this query" → Adjusts typing WPM via stealth settings
 
+### ask_question source control
+
+`ask_question` also supports:
+- `include_sources: boolean` — Extract source/citation references from NotebookLM response DOM and include them as structured output when available.
+
+If omitted, the global `always-include-sources` setting is used (default `true`).
+
 ---
 
 ## Environment Variables (Optional)
@@ -63,6 +70,8 @@ For advanced users who want to set global defaults:
   - `HEADLESS` (default `true`), `BROWSER_TIMEOUT` (ms, default `30000`)
 - Sessions
   - `MAX_SESSIONS` (default 10), `SESSION_TIMEOUT` (s, default 900)
+- Response formatting defaults
+  - `NOTEBOOKLM_ALWAYS_INCLUDE_SOURCES` — `true|false` (default `true`)
 - Multi‑instance profile strategy
   - `NOTEBOOK_PROFILE_STRATEGY` — `auto|single|isolated` (default `auto`)
   - `NOTEBOOK_CLONE_PROFILE` — clone base profile into isolated dir (default `false`)
@@ -91,4 +100,3 @@ The server uses platform-specific paths via [env-paths](https://github.com/sindr
 - `chrome_profile_instances/` - Isolated Chrome profiles for concurrent sessions
 
 **No config.json file** - Configuration is purely via environment variables or tool parameters!
-

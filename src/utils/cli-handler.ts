@@ -60,9 +60,32 @@ export class CliHandler {
       const tools = value.split(",").map(t => t.trim()).filter(t => t.length > 0);
       await this.settingsManager.saveSettings({ disabledTools: tools });
       console.log(`✅ Disabled tools set to: ${tools.join(", ") || "(none)"}`);
+    } else if (key === "always-include-sources") {
+      const parsed = this.parseBoolean(value);
+      if (parsed === undefined) {
+        throw new Error("Invalid value for always-include-sources. Allowed: true, false");
+      }
+
+      const stored = this.settingsManager.getStoredSettings();
+      await this.settingsManager.saveSettings({
+        customSettings: {
+          ...(stored.customSettings || { alwaysIncludeSources: true }),
+          alwaysIncludeSources: parsed,
+        },
+      });
+      console.log(`✅ Always include sources set to: ${parsed}`);
     } else {
-      throw new Error(`Unknown setting: ${key}. Allowed: profile, disabled-tools`);
+      throw new Error(
+        `Unknown setting: ${key}. Allowed: profile, disabled-tools, always-include-sources`
+      );
     }
+  }
+
+  private parseBoolean(value: string): boolean | undefined {
+    const lower = value.trim().toLowerCase();
+    if (lower === "true" || lower === "1") return true;
+    if (lower === "false" || lower === "0") return false;
+    return undefined;
   }
 
   private handleGet(): void {
@@ -72,6 +95,7 @@ export class CliHandler {
     console.log("🔧 Current Configuration:");
     console.log(`  Profile: ${settings.profile}`);
     console.log(`  Disabled Tools: ${settings.disabledTools.length > 0 ? settings.disabledTools.join(", ") : "(none)"}`);
+    console.log(`  Always Include Sources: ${settings.customSettings?.alwaysIncludeSources ?? true}`);
     console.log(`  Settings File: ${this.settingsManager.getSettingsPath()}`);
     console.log("");
     console.log("📋 Active Tools in this profile:");
@@ -87,9 +111,12 @@ export class CliHandler {
   private async handleReset(): Promise<void> {
     await this.settingsManager.saveSettings({
       profile: "full",
-      disabledTools: []
+      disabledTools: [],
+      customSettings: {
+        alwaysIncludeSources: true,
+      },
     });
-    console.log("✅ Configuration reset to defaults (Profile: full, No disabled tools)");
+    console.log("✅ Configuration reset to defaults (Profile: full, No disabled tools, Always include sources: true)");
   }
 
   private printHelp(): void {
@@ -100,6 +127,7 @@ Commands:
   config get                       Show current configuration
   config set profile <name>        Set profile (minimal, standard, full)
   config set disabled-tools <list> Set disabled tools (comma-separated)
+  config set always-include-sources <true|false>  Include source section by default
   config reset                     Reset to default settings
 
 Profiles:

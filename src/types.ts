@@ -18,11 +18,19 @@ export interface SessionInfo {
 /**
  * Result from asking a question
  */
+export interface SourceReference {
+  title: string;
+  url?: string;
+  raw_text: string;
+}
+
 export interface AskQuestionResult {
   status: "success" | "error";
   question: string;
   answer?: string;
   error?: string;
+  include_sources?: boolean;
+  sources?: SourceReference[];
   notebook_url: string;
   session_id?: string;
   session_info?: {

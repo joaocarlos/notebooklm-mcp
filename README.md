@@ -255,6 +255,9 @@ npx notebooklm-mcp config set profile full
 # Disable specific tools (comma-separated)
 npx notebooklm-mcp config set disabled-tools "cleanup_data,re_auth"
 
+# Include sources in ask_question responses by default
+npx notebooklm-mcp config set always-include-sources true
+
 # Reset to defaults
 npx notebooklm-mcp config reset
 ```
@@ -267,6 +270,9 @@ export NOTEBOOKLM_PROFILE=minimal
 
 # Disable specific tools
 export NOTEBOOKLM_DISABLED_TOOLS="cleanup_data,re_auth,remove_notebook"
+
+# Override global source inclusion behavior
+export NOTEBOOKLM_ALWAYS_INCLUDE_SOURCES=true
 ```
 
 Settings are saved to `~/.config/notebooklm-mcp/settings.json` and persist across sessions. Environment variables override file settings.
