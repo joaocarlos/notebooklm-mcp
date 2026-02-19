@@ -10,7 +10,12 @@
  * Based on the Python implementation from page_utils.py
  */
 
+import { setTimeout as delay } from "node:timers/promises";
 import type { Page } from "patchright";
+import {
+  browserErrorMessage,
+  isRecoverableBrowserError,
+} from "./browser-errors.js";
 import { log } from "./logger.js";
 
 // ============================================================================
@@ -37,6 +42,14 @@ const RESPONSE_SELECTORS = [
   "[role='listitem'][data-message-author]",
 ];
 
+const MIN_POLL_INTERVAL_MS = 100;
+const POLL_GUARD_MULTIPLIER = 5;
+const MIN_POLL_GUARD = 120;
+const FAST_POLL_DRIFT_THRESHOLD_MS = 50;
+const MAX_FAST_POLL_STREAK = 5;
+const HEALTH_CHECK_INTERVAL_POLLS = 10;
+const HEALTH_CHECK_TIMEOUT_MS = 2000;
+
 
 // ============================================================================
 // Helper Functions
@@ -53,6 +66,55 @@ function hashString(str: string): number {
     hash = hash & hash; // Convert to 32bit integer
   }
   return hash;
+}
+
+function throwIfRecoverableBrowserError(error: unknown, context: string): void {
+  if (isRecoverableBrowserError(error)) {
+    throw new Error(`${context}: ${browserErrorMessage(error)}`);
+  }
+}
+
+async function assertPageResponsive(page: Page, timeoutMs: number): Promise<void> {
+  const timeoutPromise = delay(timeoutMs).then(() => {
+    throw new Error(`health check timed out after ${timeoutMs}ms`);
+  });
+
+  try {
+    await Promise.race([page.evaluate(() => true), timeoutPromise]);
+  } catch (error) {
+    throw new Error(`Browser page unresponsive: ${browserErrorMessage(error)}`);
+  }
+}
+
+async function waitForPollInterval(
+  page: Page,
+  pollIntervalMs: number,
+  fastPollStreakRef: { value: number },
+  debug: boolean
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    await page.waitForTimeout(pollIntervalMs);
+  } catch (error) {
+    throwIfRecoverableBrowserError(error, "Browser page unavailable during poll wait");
+    throw error;
+  }
+
+  const waitedMs = Date.now() - startedAt;
+  const remainingMs = pollIntervalMs - waitedMs;
+
+  if (remainingMs > FAST_POLL_DRIFT_THRESHOLD_MS) {
+    fastPollStreakRef.value++;
+    if (debug) {
+      log.warning(
+        `⚠️ [DEBUG] Poll wait returned early (${waitedMs}ms < ${pollIntervalMs}ms), using fallback sleep`
+      );
+    }
+    await delay(remainingMs);
+    return;
+  }
+
+  fastPollStreakRef.value = 0;
 }
 
 
@@ -165,6 +227,9 @@ export async function waitForLatestAnswer(
     debug = false,
   } = options;
 
+  const safePollIntervalMs = Math.max(MIN_POLL_INTERVAL_MS, pollIntervalMs);
+  const expectedPolls = Math.ceil(timeoutMs / safePollIntervalMs);
+  const maxPolls = Math.max(MIN_POLL_GUARD, expectedPolls * POLL_GUARD_MULTIPLIER);
   const deadline = Date.now() + timeoutMs;
   const sanitizedQuestion = question.trim().toLowerCase();
 
@@ -186,9 +251,14 @@ export async function waitForLatestAnswer(
   let lastCandidate: string | null = null;
   let stableCount = 0; // Track how many times we see the same text
   const requiredStablePolls = 3; // Text must be stable for 3 consecutive polls
+  const fastPollStreakRef = { value: 0 };
 
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && pollCount < maxPolls) {
     pollCount++;
+
+    if (pollCount % HEALTH_CHECK_INTERVAL_POLLS === 0) {
+      await assertPageResponsive(page, HEALTH_CHECK_TIMEOUT_MS);
+    }
 
     // Check if NotebookLM is still "thinking" (most reliable indicator)
     try {
@@ -199,21 +269,25 @@ export async function waitForLatestAnswer(
           if (debug && pollCount % 5 === 0) {
             log.debug("🔍 [DEBUG] NotebookLM still thinking (div.thinking-message visible)...");
           }
-          await page.waitForTimeout(pollIntervalMs);
+          await waitForPollInterval(
+            page,
+            safePollIntervalMs,
+            fastPollStreakRef,
+            debug
+          );
           continue;
         }
       }
-    } catch {
+    } catch (error) {
+      throwIfRecoverableBrowserError(
+        error,
+        "Browser page unavailable while checking thinking indicator"
+      );
       // Ignore errors checking thinking state
     }
 
     // Extract latest NEW text
-    const candidate = await extractLatestText(
-      page,
-      knownHashes,
-      debug,
-      pollCount
-    );
+    const candidate = await extractLatestText(page, knownHashes, debug, pollCount);
 
     if (candidate) {
       const normalized = candidate.trim();
@@ -226,7 +300,12 @@ export async function waitForLatestAnswer(
             log.debug("🔍 [DEBUG] Found question echo, ignoring");
           }
           knownHashes.add(hashString(normalized)); // Mark as seen
-          await page.waitForTimeout(pollIntervalMs);
+          await waitForPollInterval(
+            page,
+            safePollIntervalMs,
+            fastPollStreakRef,
+            debug
+          );
           continue;
         }
 
@@ -262,7 +341,18 @@ export async function waitForLatestAnswer(
       }
     }
 
-    await page.waitForTimeout(pollIntervalMs);
+    await waitForPollInterval(page, safePollIntervalMs, fastPollStreakRef, debug);
+
+    if (fastPollStreakRef.value >= MAX_FAST_POLL_STREAK) {
+      await assertPageResponsive(page, HEALTH_CHECK_TIMEOUT_MS);
+      fastPollStreakRef.value = 0;
+    }
+  }
+
+  if (pollCount >= maxPolls && Date.now() < deadline) {
+    throw new Error(
+      `Polling guard triggered after ${pollCount} polls before timeout; browser page may be unresponsive`
+    );
   }
 
   if (debug) {
@@ -336,7 +426,11 @@ async function extractLatestText(
               empty++;
             }
           }
-        } catch {
+        } catch (error) {
+          throwIfRecoverableBrowserError(
+            error,
+            "Browser page unavailable while reading response container"
+          );
           continue;
         }
       }
@@ -354,6 +448,7 @@ async function extractLatestText(
       }
     }
   } catch (error) {
+    throwIfRecoverableBrowserError(error, "Browser page unavailable in primary extraction");
     log.error(`❌ [EXTRACT] Primary selector failed: ${error}`);
   }
 
@@ -382,7 +477,11 @@ async function extractLatestText(
             if (closest) {
               container = closest.asElement() || element;
             }
-          } catch {
+          } catch (error) {
+            throwIfRecoverableBrowserError(
+              error,
+              "Browser page unavailable while resolving response container"
+            );
             container = element;
           }
 
@@ -390,11 +489,19 @@ async function extractLatestText(
           if (text && text.trim() && !knownHashes.has(hashString(text.trim()))) {
             return text.trim();
           }
-        } catch {
+        } catch (error) {
+          throwIfRecoverableBrowserError(
+            error,
+            "Browser page unavailable while reading fallback response element"
+          );
           continue;
         }
       }
-    } catch {
+    } catch (error) {
+      throwIfRecoverableBrowserError(
+        error,
+        `Browser page unavailable while querying fallback selector (${selector})`
+      );
       continue;
     }
   }
@@ -457,7 +564,8 @@ async function extractLatestText(
     if (typeof fallbackText === "string" && fallbackText.trim()) {
       return fallbackText.trim();
     }
-  } catch {
+  } catch (error) {
+    throwIfRecoverableBrowserError(error, "Browser page unavailable during JS fallback extraction");
     // Ignore evaluation errors
   }
 

@@ -25,6 +25,10 @@ import { CONFIG } from "../config.js";
 import { log } from "../utils/logger.js";
 import type { SessionInfo, ProgressCallback } from "../types.js";
 import { RateLimitError } from "../errors.js";
+import {
+  browserErrorMessage,
+  isRecoverableBrowserError,
+} from "../utils/browser-errors.js";
 
 export class BrowserSession {
   public readonly sessionId: string;
@@ -74,14 +78,13 @@ export class BrowserSession {
       // Create new page (tab) in the shared context (with auto-recovery)
       try {
         this.page = await this.context.newPage();
-      } catch (e: any) {
-        const msg = String(e?.message || e);
-        if (/has been closed|Target .* closed|Browser has been closed|Context .* closed/i.test(msg)) {
-          log.warning("  ♻️  Context was closed. Recreating and retrying newPage...");
+      } catch (error) {
+        if (isRecoverableBrowserError(error)) {
+          log.warning("  ♻️  Context unavailable or unresponsive. Recreating and retrying newPage...");
           this.context = await this.sharedContextManager.getOrCreateContext();
           this.page = await this.context.newPage();
         } else {
-          throw e;
+          throw error;
         }
       }
       log.success(`  ✅ Created new page`);
@@ -440,10 +443,10 @@ export class BrowserSession {
 
     try {
       return await askOnce();
-    } catch (error: any) {
-      const msg = String(error?.message || error);
-      if (/has been closed|Target .* closed|Browser has been closed|Context .* closed/i.test(msg)) {
-        log.warning(`  ♻️  Detected closed page/context. Recovering session and retrying ask...`);
+    } catch (error) {
+      const msg = browserErrorMessage(error);
+      if (isRecoverableBrowserError(error)) {
+        log.warning(`  ♻️  Detected unavailable/unresponsive page/context. Recovering session and retrying ask...`);
         try {
           this.initialized = false;
           if (this.page) { try { await this.page.close(); } catch {} }
@@ -620,10 +623,10 @@ export class BrowserSession {
 
     try {
       await resetOnce();
-    } catch (error: any) {
-      const msg = String(error?.message || error);
-      if (/has been closed|Target .* closed|Browser has been closed|Context .* closed/i.test(msg)) {
-        log.warning(`  ♻️  Detected closed page/context during reset. Recovering and retrying...`);
+    } catch (error) {
+      const msg = browserErrorMessage(error);
+      if (isRecoverableBrowserError(error)) {
+        log.warning(`  ♻️  Detected unavailable/unresponsive page/context during reset. Recovering and retrying...`);
         this.initialized = false;
         if (this.page) { try { await this.page.close(); } catch {} }
         this.page = null;
